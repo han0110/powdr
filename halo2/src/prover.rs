@@ -37,7 +37,7 @@ use snark_verifier::{
 use crate::circuit_builder::analyzed_to_circuit;
 use std::io;
 use std::time::{Duration, Instant};
-use std::{io::Cursor, rc::Rc};
+use std::{fs, io::Read, io::Cursor, rc::Rc};
 use rand::rngs::OsRng;
 use itertools::Itertools;
 
@@ -196,29 +196,40 @@ pub fn prove_aggr<T: FieldElement>(
         aggregation::AggregationCircuit::accumulator_indices(),
     );
     let duration = start.elapsed();
+    println!("{:?}", deployment_code);
     println!("Time taken: {:?}", duration);
 
-    /*
     println!("Generating app snark with witness proof...");
     let start = Instant::now();
-    let snark = aggregation::Snark::new(protocol_app, vec![], proof.clone());
+    let snark = aggregation::Snark::new(protocol_app, vec![], proof);
     let agg_circuit = aggregation::AggregationCircuit::new(&params, [snark]);
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
 
-    println!("Generating app snark with witness proof...");
+    println!("Generating aggregated proof...");
     let start = Instant::now();
+
+    let mut proof_file = fs::File::open("proof_aggr.bin").unwrap();
+    let mut proof = vec![];
+    proof_file.read_to_end(&mut proof).unwrap();
+    /*
     let proof = gen_proof::<_, _, EvmTranscript<G1Affine, _, _, _>, EvmTranscript<G1Affine, _, _, _>>(
         &params,
         &pk,
         agg_circuit.clone(),
         agg_circuit.instances(),
     );
+    */
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
-    */
 
-    vec![]
+    println!("Verifying aggregated proof in the EVM...");
+    let start = Instant::now();
+    evm_verify(deployment_code, agg_circuit.instances(), &proof);
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
+
+    proof
 }
 
 pub fn kzg_params(size: usize) -> ParamsKZG<Bn256> {
@@ -657,5 +668,13 @@ fn gen_aggregation_evm_verifier(
     let proof = PlonkVerifier::read_proof(&vk, &protocol, &instances, &mut transcript).unwrap();
     PlonkVerifier::verify(&vk, &protocol, &instances, &proof).unwrap();
 
+    println!("yul code: {:?}", &loader.yul_code());
     evm::compile_yul(&loader.yul_code())
+}
+
+fn evm_verify(deployment_code: Vec<u8>, instances: Vec<Vec<Fr>>, proof: &Vec<u8>) {
+    let calldata = encode_calldata(&instances, proof);
+    println!("calldata: {calldata:?}");
+    let gas_cost = deploy_and_call(deployment_code, calldata).unwrap();
+    dbg!(gas_cost);
 }
