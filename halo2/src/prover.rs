@@ -1,7 +1,7 @@
 use halo2_proofs::{
     dev::MockProver,
     halo2curves::bn256::{Bn256, Fq, Fr, G1Affine},
-    plonk::{create_proof, keygen_pk, keygen_vk, verify_proof, Circuit, ProvingKey},
+    plonk::{create_proof, keygen_pk, keygen_vk, verify_proof, Circuit, ProvingKey, VerifyingKey},
     poly::{
         commitment::{Params, ParamsProver},
         kzg::{
@@ -37,6 +37,9 @@ use snark_verifier::{
 use crate::circuit_builder::analyzed_to_circuit;
 use std::io;
 use std::time::{Duration, Instant};
+use std::{io::Cursor, rc::Rc};
+use rand::rngs::OsRng;
+use itertools::Itertools;
 
 const LIMBS: usize = 4;
 const BITS: usize = 68;
@@ -153,21 +156,28 @@ pub fn prove_aggr<T: FieldElement>(
         params
     };
 
+    println!("Generating app circuit...");
+    let start = Instant::now();
     let circuit = analyzed_to_circuit(pil, fixed, witness);
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
 
+    println!("Generating app circuit verification key...");
+    let start = Instant::now();
     let vk_app = keygen_vk(&params_app, &circuit).unwrap();
     //let pk_app = keygen_pk(&params, vk_app.clone(), &circuit).unwrap();
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
 
     println!("Generating circuit for compression snark...");
     let start = Instant::now();
-    let protocol = compile(
+    let protocol_app = compile(
         &params_app,
         &vk_app,
         Config::kzg().with_num_instance(vec![]),
     );
-    // wrap the previous proof in the Snark type
-    let snark = aggregation::Snark::new(protocol, vec![], proof.clone());
-    let agg_circuit = aggregation::AggregationCircuit::new(&params, [snark]);
+    let empty_snark = aggregation::Snark::new_without_witness(protocol_app.clone());
+    let agg_circuit = aggregation::AggregationCircuit::new_without_witness(&params, [empty_snark]);
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
 
@@ -176,6 +186,37 @@ pub fn prove_aggr<T: FieldElement>(
     let pk = gen_pk(&params, &agg_circuit);
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
+
+    println!("Generating compressed snark verifier...");
+    let start = Instant::now();
+    let deployment_code = gen_aggregation_evm_verifier(
+        &params,
+        pk.get_vk(),
+        aggregation::AggregationCircuit::num_instance(),
+        aggregation::AggregationCircuit::accumulator_indices(),
+    );
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
+
+    /*
+    println!("Generating app snark with witness proof...");
+    let start = Instant::now();
+    let snark = aggregation::Snark::new(protocol_app, vec![], proof.clone());
+    let agg_circuit = aggregation::AggregationCircuit::new(&params, [snark]);
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
+
+    println!("Generating app snark with witness proof...");
+    let start = Instant::now();
+    let proof = gen_proof::<_, _, EvmTranscript<G1Affine, _, _, _>, EvmTranscript<G1Affine, _, _, _>>(
+        &params,
+        &pk,
+        agg_circuit.clone(),
+        agg_circuit.instances(),
+    );
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
+    */
 
     vec![]
 }
@@ -255,6 +296,17 @@ mod aggregation {
                 proof,
             }
         }
+
+        pub fn new_without_witness(
+            protocol: PlonkProtocol<G1Affine>,
+        ) -> Self {
+            Self {
+                protocol,
+                instances: vec![],
+                proof: Default::default(),
+            }
+        }
+
     }
 
     impl From<Snark> for SnarkWitness {
@@ -426,6 +478,18 @@ mod aggregation {
             }
         }
 
+        pub fn new_without_witness(params: &ParamsKZG<Bn256>, snarks: impl IntoIterator<Item = Snark>) -> Self {
+            let svk = params.get_g()[0].into();
+            let snarks = snarks.into_iter().collect_vec();
+
+            Self {
+                svk,
+                snarks: snarks.into_iter().map_into().collect(),
+                instances: vec![],
+                as_proof: Value::unknown(),
+            }
+        }
+
         pub fn accumulator_indices() -> Vec<(usize, usize)> {
             (0..4 * LIMBS).map(|idx| (0, idx)).collect()
         }
@@ -517,4 +581,81 @@ mod aggregation {
 fn gen_pk<C: Circuit<Fr>>(params: &ParamsKZG<Bn256>, circuit: &C) -> ProvingKey<G1Affine> {
     let vk = keygen_vk(params, circuit).unwrap();
     keygen_pk(params, vk, circuit).unwrap()
+}
+
+fn gen_proof<
+    C: Circuit<Fr>,
+    E: EncodedChallenge<G1Affine>,
+    TR: TranscriptReadBuffer<Cursor<Vec<u8>>, G1Affine, E>,
+    TW: TranscriptWriterBuffer<Vec<u8>, G1Affine, E>,
+>(
+    params: &ParamsKZG<Bn256>,
+    pk: &ProvingKey<G1Affine>,
+    circuit: C,
+    instances: Vec<Vec<Fr>>,
+) -> Vec<u8> {
+    MockProver::run(params.k(), &circuit, instances.clone())
+        .unwrap()
+        .assert_satisfied();
+
+    let instances = instances
+        .iter()
+        .map(|instances| instances.as_slice())
+        .collect_vec();
+    let proof = {
+        let mut transcript = TW::init(Vec::new());
+        create_proof::<KZGCommitmentScheme<Bn256>, ProverGWC<_>, _, _, TW, _>(
+            params,
+            pk,
+            &[circuit],
+            &[instances.as_slice()],
+            OsRng,
+            &mut transcript,
+        )
+        .unwrap();
+        transcript.finalize()
+    };
+
+    let accept = {
+        let mut transcript = TR::init(Cursor::new(proof.clone()));
+        VerificationStrategy::<_, VerifierGWC<_>>::finalize(
+            verify_proof::<_, VerifierGWC<_>, _, TR, _>(
+                params.verifier_params(),
+                pk.get_vk(),
+                AccumulatorStrategy::new(params.verifier_params()),
+                &[instances.as_slice()],
+                &mut transcript,
+            )
+            .unwrap(),
+        )
+    };
+    assert!(accept);
+
+    proof
+}
+
+fn gen_aggregation_evm_verifier(
+    params: &ParamsKZG<Bn256>,
+    vk: &VerifyingKey<G1Affine>,
+    num_instance: Vec<usize>,
+    accumulator_indices: Vec<(usize, usize)>,
+) -> Vec<u8> {
+    let protocol = compile(
+        params,
+        vk,
+        Config::kzg()
+            .with_num_instance(num_instance.clone())
+            .with_accumulator_indices(Some(accumulator_indices)),
+    );
+    let vk = (params.get_g()[0], params.g2(), params.s_g2()).into();
+
+    let loader = EvmLoader::new::<Fq, Fr>();
+    let protocol = protocol.loaded(&loader);
+    let mut transcript = EvmTranscript::<_, Rc<EvmLoader>, _, _>::new(&loader);
+
+    let instances = transcript.load_instances(num_instance);
+    let proof = PlonkVerifier::read_proof(&vk, &protocol, &instances, &mut transcript).unwrap();
+    PlonkVerifier::verify(&vk, &protocol, &instances, &proof).unwrap();
+
+    evm::compile_yul(&loader.yul_code())
 }
