@@ -86,8 +86,6 @@ pub fn prove_ast<T: FieldElement>(
     let inputs = vec![];
 
     let vk = keygen_vk(&params, &circuit).unwrap();
-    println!("{vk:?}");
-    panic!("aaaaaaaa");
     let pk = keygen_pk(&params, vk.clone(), &circuit).unwrap();
     let mut transcript: Keccak256Write<
         Vec<u8>,
@@ -117,6 +115,55 @@ pub fn prove_ast<T: FieldElement>(
         &mut transcript
     )
     .is_ok());
+
+    println!("Generating circuit for compression snark...");
+    let start = Instant::now();
+    let protocol_app = compile(
+        &params,
+        &vk,
+        Config::kzg().with_num_instance(vec![]),
+    );
+    //let empty_snark = aggregation::Snark::new_without_witness(protocol_app.clone());
+    //let agg_circuit = aggregation::AggregationCircuit::new_without_witness(&params, [empty_snark]);
+    let snark = aggregation::Snark::new(protocol_app, vec![], proof.clone());
+    let agg_circuit = aggregation::AggregationCircuit::new(&params, [snark]);
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
+
+    println!("Generating pk for compression snark...");
+    let start = Instant::now();
+    let pk_aggr = gen_pk(&params, &agg_circuit);
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
+
+    println!("Generating compressed snark verifier...");
+    let start = Instant::now();
+    let deployment_code = gen_aggregation_evm_verifier(
+        &params,
+        pk_aggr.get_vk(),
+        aggregation::AggregationCircuit::num_instance(),
+        aggregation::AggregationCircuit::accumulator_indices(),
+    );
+    let duration = start.elapsed();
+    //println!("{:?}", deployment_code);
+    println!("Time taken: {:?}", duration);
+
+    println!("Generating aggregated proof...");
+    let start = Instant::now();
+    let proof_aggr = gen_proof::<_, _, EvmTranscript<G1Affine, _, _, _>, EvmTranscript<G1Affine, _, _, _>>(
+        &params,
+        &pk_aggr,
+        agg_circuit.clone(),
+        agg_circuit.instances(),
+    );
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
+
+    println!("Verifying aggregated proof in the EVM...");
+    let start = Instant::now();
+    evm_verify(deployment_code, agg_circuit.instances(), &proof_aggr);
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
 
     proof
 }
@@ -160,10 +207,13 @@ pub fn prove_aggr<T: FieldElement>(
     };
     */
     let params_app = params.clone();
+    println!("{params_app:?}");
+    //panic!("aaaaaaaa");
 
     println!("Generating app circuit...");
     let start = Instant::now();
     let circuit = analyzed_to_circuit(pil, fixed, witness);
+    println!("{circuit:?}");
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
 
@@ -171,7 +221,7 @@ pub fn prove_aggr<T: FieldElement>(
     let start = Instant::now();
     let vk_app = keygen_vk(&params_app, &circuit).unwrap();
     println!("{vk_app:?}");
-    panic!("aaaaaaaa");
+    panic!("cccccccc");
     //let pk_app = keygen_pk(&params, vk_app.clone(), &circuit).unwrap();
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
