@@ -61,11 +61,17 @@ pub fn prove_ast_read_params<T: FieldElement, R: io::Read>(
         panic!("powdr modulus doesn't match halo2 modulus. Make sure you are using Bn254");
     }
 
+    println!("Reading params...");
+    let start = Instant::now();
+    let params = ParamsKZG::<Bn256>::read(&mut params).unwrap();
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
+
     prove_ast(
         pil,
         fixed,
         witness,
-        ParamsKZG::<Bn256>::read(&mut params).unwrap(),
+        params
     )
 }
 
@@ -79,20 +85,36 @@ pub fn prove_ast<T: FieldElement>(
         panic!("powdr modulus doesn't match halo2 modulus. Make sure you are using Bn254");
     }
 
+    println!("Generating circuit for app snark...");
+    let start = Instant::now();
     let circuit = analyzed_to_circuit(pil, fixed, witness);
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
 
     log::debug!("{}", PlafDisplayBaseTOML(&circuit.plaf));
 
     let inputs = vec![];
 
+    println!("Generating VK for app snark...");
+    let start = Instant::now();
     let vk = keygen_vk(&params, &circuit).unwrap();
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
+
+    println!("Generating PK for app snark...");
+    let start = Instant::now();
     let pk = keygen_pk(&params, vk.clone(), &circuit).unwrap();
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
+
     let mut transcript: Keccak256Write<
         Vec<u8>,
         G1Affine,
         halo2_proofs::transcript::Challenge255<G1Affine>,
     > = Keccak256Write::init(vec![]);
 
+    println!("Generating proof for app snark...");
+    let start = Instant::now();
     create_proof::<KZGCommitmentScheme<Bn256>, ProverGWC<_>, _, _, _, _>(
         &params,
         &pk,
@@ -102,11 +124,15 @@ pub fn prove_ast<T: FieldElement>(
         &mut transcript,
     )
     .unwrap();
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
 
     let proof = transcript.finalize();
 
     let mut transcript = Keccak256Read::init(&proof[..]);
 
+    println!("Verifying app snark...");
+    let start = Instant::now();
     assert!(verify_proof::<_, VerifierGWC<_>, _, _, _>(
         &params,
         &vk,
@@ -115,6 +141,8 @@ pub fn prove_ast<T: FieldElement>(
         &mut transcript
     )
     .is_ok());
+    let duration = start.elapsed();
+    println!("Time taken: {:?}", duration);
 
     println!("Generating circuit for compression snark...");
     let start = Instant::now();
