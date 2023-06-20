@@ -86,6 +86,8 @@ pub fn prove_ast<T: FieldElement>(
     let inputs = vec![];
 
     let vk = keygen_vk(&params, &circuit).unwrap();
+    println!("{vk:?}");
+    panic!("aaaaaaaa");
     let pk = keygen_pk(&params, vk.clone(), &circuit).unwrap();
     let mut transcript: Keccak256Write<
         Vec<u8>,
@@ -150,11 +152,14 @@ pub fn prove_aggr<T: FieldElement>(
 
     // TODO this is hacky
     let degree = usize::BITS - fixed[0].1.len().leading_zeros() + 1;
+    /*
     let params_app = {
         let mut params = params.clone();
         params.downsize(degree);
         params
     };
+    */
+    let params_app = params.clone();
 
     println!("Generating app circuit...");
     let start = Instant::now();
@@ -165,6 +170,8 @@ pub fn prove_aggr<T: FieldElement>(
     println!("Generating app circuit verification key...");
     let start = Instant::now();
     let vk_app = keygen_vk(&params_app, &circuit).unwrap();
+    println!("{vk_app:?}");
+    panic!("aaaaaaaa");
     //let pk_app = keygen_pk(&params, vk_app.clone(), &circuit).unwrap();
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
@@ -176,8 +183,10 @@ pub fn prove_aggr<T: FieldElement>(
         &vk_app,
         Config::kzg().with_num_instance(vec![]),
     );
-    let empty_snark = aggregation::Snark::new_without_witness(protocol_app.clone());
-    let agg_circuit = aggregation::AggregationCircuit::new_without_witness(&params, [empty_snark]);
+    //let empty_snark = aggregation::Snark::new_without_witness(protocol_app.clone());
+    //let agg_circuit = aggregation::AggregationCircuit::new_without_witness(&params, [empty_snark]);
+    let snark = aggregation::Snark::new(protocol_app, vec![], proof);
+    let agg_circuit = aggregation::AggregationCircuit::new(&params, [snark]);
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
 
@@ -201,25 +210,25 @@ pub fn prove_aggr<T: FieldElement>(
 
     println!("Generating app snark with witness proof...");
     let start = Instant::now();
-    let snark = aggregation::Snark::new(protocol_app, vec![], proof);
-    let agg_circuit = aggregation::AggregationCircuit::new(&params, [snark]);
+    //let snark = aggregation::Snark::new(protocol_app, vec![], proof);
+    //let agg_circuit = aggregation::AggregationCircuit::new(&params, [snark]);
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
 
     println!("Generating aggregated proof...");
     let start = Instant::now();
 
+    /*
     let mut proof_file = fs::File::open("proof_aggr.bin").unwrap();
     let mut proof = vec![];
     proof_file.read_to_end(&mut proof).unwrap();
-    /*
+    */
     let proof = gen_proof::<_, _, EvmTranscript<G1Affine, _, _, _>, EvmTranscript<G1Affine, _, _, _>>(
         &params,
         &pk,
         agg_circuit.clone(),
         agg_circuit.instances(),
     );
-    */
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
 
