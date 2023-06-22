@@ -107,42 +107,12 @@ pub fn prove_ast<T: FieldElement>(
     let duration = start.elapsed();
     println!("Time taken: {:?}", duration);
 
-    let mut transcript: Keccak256Write<
-        Vec<u8>,
-        G1Affine,
-        halo2_proofs::transcript::Challenge255<G1Affine>,
-    > = Keccak256Write::init(vec![]);
-
-    println!("Generating proof for app snark...");
-    let start = Instant::now();
-    create_proof::<KZGCommitmentScheme<Bn256>, ProverGWC<_>, _, _, _, _>(
-        &params,
-        &pk,
-        &[circuit],
-        &[&inputs],
-        StdRng::from_entropy(),
-        &mut transcript,
-    )
-    .unwrap();
-    let duration = start.elapsed();
-    println!("Time taken: {:?}", duration);
-
-    let proof = transcript.finalize();
-
-    let mut transcript = Keccak256Read::init(&proof[..]);
-
-    println!("Verifying app snark...");
-    let start = Instant::now();
-    assert!(verify_proof::<_, VerifierGWC<_>, _, _, _>(
-        &params,
-        &vk,
-        SingleStrategy::new(&params),
-        &[&inputs],
-        &mut transcript
-    )
-    .is_ok());
-    let duration = start.elapsed();
-    println!("Time taken: {:?}", duration);
+    let proof = gen_proof::<
+        _,
+        _,
+        aggregation::PoseidonTranscript<NativeLoader, _>,
+        aggregation::PoseidonTranscript<NativeLoader, _>,
+    >(&params, &pk, circuit, inputs);
 
     println!("Generating circuit for compression snark...");
     let start = Instant::now();
