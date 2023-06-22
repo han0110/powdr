@@ -33,7 +33,6 @@ use snark_verifier::{
     util::arithmetic::{CurveAffine, PrimeField},
     verifier::{self, plonk::PlonkProtocol, SnarkVerifier},
 };
-
 use crate::circuit_builder::analyzed_to_circuit;
 use std::io;
 use std::time::{Duration, Instant};
@@ -307,7 +306,10 @@ pub fn generate_params<T: FieldElement>(size: usize) -> Vec<u8> {
 
 mod aggregation {
     use super::{As, PlonkSuccinctVerifier, BITS, LIMBS};
-    use halo2_curves::bn256::{Bn256, Fq, Fr, G1Affine};
+    use halo2_curves::{
+        bn256::{Bn256, Fq, Fr, G1Affine},
+        ff::Field,
+    };
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
         plonk::{self, Circuit, ConstraintSystem, Error},
@@ -365,12 +367,15 @@ mod aggregation {
             }
         }
 
-        pub fn new_without_witness(
-            protocol: PlonkProtocol<G1Affine>,
-        ) -> Self {
+        pub fn new_without_witness(protocol: PlonkProtocol<G1Affine>) -> Self {
+            let instances = protocol
+                .num_instance
+                .iter()
+                .map(|n| vec![Fr::ZERO; *n])
+                .collect_vec();
             Self {
                 protocol,
-                instances: vec![],
+                instances,
                 proof: Default::default(),
             }
         }
